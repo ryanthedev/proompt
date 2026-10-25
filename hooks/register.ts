@@ -19,7 +19,7 @@ Rewrite the text inside <prompt> to use as few tokens as possible while keeping 
 - Drop filler, pleasantries, hedges, repetition and restated context.
 - Prefer terse imperative phrasing, short clauses, and lists over prose.
 - Keep verbatim: file paths, identifiers, function and variable names, commands, flags, URLs, numbers, versions, error messages, quoted strings, @-mentions, and anything in backticks.
-- Keep every placeholder like ⟦KEEP0⟧ exactly once, where it belongs.
+- Keep every placeholder in ⟦ ⟧ brackets exactly once, unchanged, where it belongs.
 - Keep the author's intent, tone of request (question vs. command), and any explicit priorities or negations ("don't", "never", "only").
 - Do not add instructions, assumptions, or explanations of your own.
 - If the prompt is already terse, return it unchanged.
@@ -54,12 +54,23 @@ async function compress(
   original: string,
   hint: string,
 ): Promise<Outcome> {
+  // A prompt holding the placeholder brackets could forge a placeholder and
+  // have a kept tag put back where it chose.
+  if (original.includes('⟦') || original.includes('⟧')) {
+    return { isCompressed: false, reason: 'prompt holds ⟦ ⟧ brackets' }
+  }
+
   // Fenced code and markup tags never reach Haiku: they are swapped for
-  // placeholders and put back after, so they cannot be paraphrased.
+  // placeholders and put back after, so they cannot be paraphrased. Each
+  // call's placeholders carry a fresh nonce.
+  const nonce = Array.from(crypto.getRandomValues(new Uint8Array(4)), byte =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('')
+  const markOf = (i: number) => `⟦${nonce}:${i}⟧`
   const kept: string[] = []
   const keep = (span: string) => {
     kept.push(span)
-    return `⟦KEEP${kept.length - 1}⟧`
+    return markOf(kept.length - 1)
   }
   const masked = original.replace(FENCE, keep).replace(TAG, keep)
 
@@ -91,9 +102,14 @@ async function compress(
   if (text.search(TAG) !== -1) {
     return { isCompressed: false, reason: 'the rewrite added a tag' }
   }
+  // Exactly the placeholders sent, and no bracket of Haiku's own.
+  const brackets = text.split('⟦').length - 1
+  if (brackets !== kept.length || text.split('⟧').length - 1 !== kept.length) {
+    return { isCompressed: false, reason: 'a code block or tag went missing' }
+  }
   // Text may not move into a stretch between placeholders that was empty, or
   // empty one that was not: a frame's body stays inside the frame.
-  const MARK = /⟦KEEP\d+⟧/
+  const MARK = new RegExp(`⟦${nonce}:\\d+⟧`)
   const gaps = (s: string) => s.split(MARK).map(gap => gap.trim() === '')
   const before = gaps(masked)
   const now = gaps(text)
@@ -103,7 +119,7 @@ async function compress(
   // Each placeholder once, in the original order.
   let after = -1
   for (const [i, span] of kept.entries()) {
-    const mark = `⟦KEEP${i}⟧`
+    const mark = markOf(i)
     const at = text.indexOf(mark)
     if (text.split(mark).length !== 2 || at < after) {
       return { isCompressed: false, reason: 'a code block or tag moved or went missing' }

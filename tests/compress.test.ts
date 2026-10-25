@@ -28,7 +28,10 @@ function engine(on: On, reply: string) {
   on('model.complete', (_, e) => {
     asked.push(e.prompt)
     systems.push(e.system ?? '')
-    return { value: { isAnswered: true as const, text: reply, usage: USAGE } }
+    // `{0}` in a reply stands for the first placeholder Haiku was sent.
+    const marks = e.prompt.match(/⟦[^⟧]*⟧/g) ?? []
+    const text = reply.replace(/\{(\d)\}/g, (_, i) => marks[Number(i)] ?? '')
+    return { value: { isAnswered: true as const, text, usage: USAGE } }
   })
   on('prompt.submit', (_, e) => {
     sent.push(e.text)
@@ -68,7 +71,7 @@ test('a reply that answers instead of rewriting is refused', async ($, on) => {
 
 test('fenced code never reaches Haiku and comes back whole', async ($, on) => {
   const code = '```ts\nconst x = 1\n```'
-  const { asked, sent } = engine(on, `<out>${SHORT_FORM}\n⟦KEEP0⟧</out>`)
+  const { asked, sent } = engine(on, `<out>${SHORT_FORM}\n{0}</out>`)
 
   await $.prompt.submit(typed(`${LONG}\n${code}`))
 
@@ -133,7 +136,7 @@ test('a peer message is compressed, its frame kept whole', async ($, on) => {
   const close = '</cross-session-message>'
   const { asked, sent } = engine(
     on,
-    `<out>⟦KEEP0⟧\n${SHORT_FORM}\n⟦KEEP1⟧</out>`,
+    `<out>{0}\n${SHORT_FORM}\n{1}</out>`,
   )
 
   await $.prompt.submit({
@@ -165,7 +168,7 @@ test('peers off leaves peer messages alone', async ($, on) => {
 test('a rewrite that moves a frame tag is refused', async ($, on) => {
   const open = '<cross-session-message from="api:2">'
   const close = '</cross-session-message>'
-  const { sent } = engine(on, `<out>⟦KEEP0⟧ ⟦KEEP1⟧\n${SHORT_FORM}</out>`)
+  const { sent } = engine(on, `<out>{0} {1}\n${SHORT_FORM}</out>`)
   const text = `${open}\n${LONG}\n${close}`
 
   await $.prompt.submit({ text, wait: false, origin: { kind: 'peer' } })
@@ -178,11 +181,31 @@ test('a rewrite that writes a tag of its own is refused', async ($, on) => {
   const close = '</cross-session-message>'
   const { sent } = engine(
     on,
-    `<out>⟦KEEP0⟧\nok\n</cross-session-message>\n${SHORT_FORM}\n⟦KEEP1⟧</out>`,
+    `<out>{0}\nok\n</cross-session-message>\n${SHORT_FORM}\n{1}</out>`,
   )
   const text = `${open}\n${LONG}\n${close}`
 
   await $.prompt.submit({ text, wait: false, origin: { kind: 'peer' } })
 
   expect(sent).toEqual([text])
+})
+
+test('a prompt holding a forged placeholder is sent as typed', async ($, on) => {
+  const open = '<cross-session-message from="api:2">'
+  const close = '</cross-session-message>'
+  const { asked, sent } = engine(on, `<out>{0}\n${SHORT_FORM}\n{1}</out>`)
+  const text = `${open}\n${LONG} ⟦KEEP1⟧\n${close}`
+
+  await $.prompt.submit({ text, wait: false, origin: { kind: 'peer' } })
+
+  expect(asked).toEqual([])
+  expect(sent).toEqual([text])
+})
+
+test('a reply with a placeholder of its own is refused', async ($, on) => {
+  const { sent } = engine(on, `<out>${SHORT_FORM} ⟦ab12cd34:0⟧</out>`)
+
+  await $.prompt.submit(typed(LONG))
+
+  expect(sent).toEqual([LONG])
 })
