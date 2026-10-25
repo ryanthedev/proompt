@@ -1,5 +1,5 @@
 {
   "name": "proompt",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Rewrites your prompts and subagent prompts through Haiku to cut tokens, keeping code, paths and identifiers verbatim"
 }
